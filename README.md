@@ -7,7 +7,7 @@
 
 Progressive Web App (PWA) pro automatické generování uzavřených off-roadových okruhů pro DIY motokáry. Aplikace na základě aktuální GPS polohy a dat z OpenStreetMap najde trasu převážně po polních a lesních cestách a umožní její export do formátu GPX pro snadnou navigaci.
 
-*Tento projekt je **vibecoded**.*
+*Tento projekt je **vibecoded**.* (Protože tohle neberu tak seriozně a chtěl jsem to mít rychle)
 
 ## Spuštění
 
