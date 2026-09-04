@@ -14,38 +14,36 @@ import (
 	"motopath-generator/internal/routing"
 )
 
-// Handler handles HTTP requests for route generation.
-type Handler struct {
-	overpassClient *overpass.Client
-}
+// Shared Overpass client (reused across warm serverless invocations for caching)
+var opClient = overpass.NewClient(35 * time.Second)
 
-// NewHandler creates a new API handler.
-func NewHandler(opClient *overpass.Client) *Handler {
-	return &Handler{
-		overpassClient: opClient,
+// Handler is the Vercel Serverless Function entry point for /api/route.
+func Handler(w http.ResponseWriter, r *http.Request) {
+	// CORS Headers
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
 	}
-}
 
-// RegisterRoutes registers all HTTP endpoints on the standard net/http mux (Go 1.22+).
-func (h *Handler) RegisterRoutes(mux *http.ServeMux, staticDir string) {
-	// API routes
-	mux.HandleFunc("GET /api/health", h.handleHealth)
-	mux.HandleFunc("POST /api/route", h.handleGenerateRoute)
+	// Health check / GET status
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":  "ok",
+			"service": "motopath-generator",
+			"time":    time.Now().Format(time.RFC3339),
+		})
+		return
+	}
 
-	// Static files
-	fs := http.FileServer(http.Dir(staticDir))
-	mux.Handle("GET /", fs)
-}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method Not Allowed. Use POST to generate a route or GET for health check.")
+		return
+	}
 
-func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":  "ok",
-		"service": "motopath-generator",
-		"time":    time.Now().Format(time.RFC3339),
-	})
-}
-
-func (h *Handler) handleGenerateRoute(w http.ResponseWriter, r *http.Request) {
 	var req domain.RouteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
@@ -71,7 +69,7 @@ func (h *Handler) handleGenerateRoute(w http.ResponseWriter, r *http.Request) {
 		Lon: req.StartLon,
 	}
 
-	// Compute search radius around user (at least 2.5km, up to ~18km depending on desired distance)
+	// Compute search radius around user
 	searchRadiusM := (req.TargetDistKm * 1000.0) / (2.0 * math.Pi) * 1.7
 	if searchRadiusM < 2500 {
 		searchRadiusM = 2500
@@ -80,16 +78,16 @@ func (h *Handler) handleGenerateRoute(w http.ResponseWriter, r *http.Request) {
 		searchRadiusM = 18000
 	}
 
-	log.Printf("[API] Request loop: Start=(%.5f, %.5f), TargetDist=%.1f km, Radius=%.0f m, Strictness=%s",
+	log.Printf("[Vercel API] Request loop: Start=(%.5f, %.5f), TargetDist=%.1f km, Radius=%.0f m, Strictness=%s",
 		req.StartLat, req.StartLon, req.TargetDistKm, searchRadiusM, req.Strictness)
 
 	// 1. Fetch OSM road/track data
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 
-	osmData, err := h.overpassClient.FetchOsmData(ctx, startPoint, searchRadiusM)
+	osmData, err := opClient.FetchOsmData(ctx, startPoint, searchRadiusM)
 	if err != nil {
-		log.Printf("[API] Overpass fetch error: %v", err)
+		log.Printf("[Vercel API] Overpass fetch error: %v", err)
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("Failed to fetch map data from OpenStreetMap: %v", err))
 		return
 	}
@@ -103,13 +101,13 @@ func (h *Handler) handleGenerateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[API] Built graph: %d nodes, %d edges", len(graph.Nodes), len(graph.Edges))
+	log.Printf("[Vercel API] Built graph: %d nodes, %d edges", len(graph.Nodes), len(graph.Edges))
 
 	// 3. Generate off-road circuit
 	generator := routing.NewCircuitGenerator(graph, costCfg)
 	routeResp, err := generator.GenerateCircuit(startPoint, req.TargetDistKm, req.Seed)
 	if err != nil {
-		log.Printf("[API] Circuit generation error: %v", err)
+		log.Printf("[Vercel API] Circuit generation error: %v", err)
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("Could not find a valid closed off-road loop: %v. Try adjusting distance or strictness.", err))
 		return
 	}
