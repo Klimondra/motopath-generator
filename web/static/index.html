@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="cs" class="h-full bg-slate-950">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>MotoPath - Generátor Off-Road Okruhů pro Motokáry</title>
+  
+  <!-- PWA Meta Tags -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#f97316">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon.svg">
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#fff7ed',
+              100: '#ffedd5',
+              400: '#fb923c',
+              500: '#f97316',
+              600: '#ea580c',
+              700: '#c2410c',
+            },
+            kart: {
+              dirt: '#854d0e',
+              neon: '#ffea00',
+              dark: '#090d16'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Leaflet CSS & JS via CDN -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <!-- Alpine.js via CDN -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  <!-- App JS -->
+  <script src="/app.js"></script>
+
+  <style>
+    /* Full height map layout */
+    body, html {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    #map {
+      height: 100%;
+      width: 100%;
+      z-index: 10;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: rgba(249, 115, 22, 0.4);
+      border-radius: 9999px;
+    }
+    /* Outdoor high-contrast mode */
+    .outdoor-active {
+      filter: contrast(135%) brightness(105%);
+    }
+  </style>
+</head>
+<body x-data="motopathApp" :class="outdoorMode ? 'outdoor-active' : ''" class="h-full font-sans antialiased text-slate-100 flex flex-col bg-slate-950">
+
+  <!-- Top Navigation Header -->
+  <header class="z-30 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex items-center justify-between shadow-lg shrink-0">
+    <div class="flex items-center space-x-3">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-orange-600 to-amber-500 p-0.5 shadow-md flex items-center justify-center">
+        <img src="/icon.svg" alt="Logo" class="w-full h-full rounded-[10px]" />
+      </div>
+      <div>
+        <h1 class="text-base font-black tracking-tight text-white flex items-center gap-1.5">
+          <span>MotoPath</span>
+          <span class="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 bg-orange-600/30 text-orange-400 border border-orange-500/40 rounded-full">Off-Road</span>
+        </h1>
+        <p class="text-[11px] text-slate-400 font-medium">Okruhy pro motokáry a polní jízdu</p>
+      </div>
+    </div>
+
+    <!-- Header Actions -->
+    <div class="flex items-center space-x-2">
+      <!-- High Contrast / Outdoor Sun Mode Toggle -->
+      <button 
+        @click="toggleOutdoorMode" 
+        :class="outdoorMode ? 'bg-yellow-400 text-slate-950 font-black ring-2 ring-yellow-300' : 'bg-slate-800 text-slate-300 hover:text-white'"
+        class="p-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm border border-slate-700"
+        title="Přepnout režim vysokého kontrastu na slunce"
+      >
+        <span x-text="outdoorMode ? '☀️ Slunce ON' : '🌤️ Slunce'"></span>
+      </button>
+
+      <!-- GPS Locate Button -->
+      <button 
+        @click="locateMe(true)" 
+        class="p-2 bg-orange-600 hover:bg-orange-500 active:bg-orange-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-md transition-transform active:scale-95"
+        title="Zaměřit mou GPS polohu"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 2v2m0 16v2m10-10h-2M4 12H2m15.071-7.071l-1.414 1.414M8.343 15.657l-1.414 1.414m12.142 0l-1.414-1.414M8.343 8.343L6.929 6.929M12 16a4 4 0 100-8 4 4 0 000 8z" />
+        </svg>
+        <span class="hidden sm:inline">GPS</span>
+      </button>
+
+      <!-- Layer Selector Toggle -->
+      <div class="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700 text-[11px] font-medium">
+        <button 
+          @click="setLayer('osm')" 
+          :class="activeLayer === 'osm' ? 'bg-orange-600 text-white shadow' : 'text-slate-400 hover:text-white'"
+          class="px-2 py-1 rounded transition-colors"
+        >Mapa</button>
+        <button 
+          @click="setLayer('topo')" 
+          :class="activeLayer === 'topo' ? 'bg-orange-600 text-white shadow' : 'text-slate-400 hover:text-white'"
+          class="px-2 py-1 rounded transition-colors"
+        >Topo</button>
+        <button 
+          @click="setLayer('sat')" 
+          :class="activeLayer === 'sat' ? 'bg-orange-600 text-white shadow' : 'text-slate-400 hover:text-white'"
+          class="px-2 py-1 rounded transition-colors"
+        >Satelit</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace (Map + Controls Drawer) -->
+  <main class="relative flex-1 w-full h-full overflow-hidden">
+    <!-- Map Container -->
+    <div id="map" class="w-full h-full"></div>
+
+    <!-- Floating Map Hint (Start Pin Instruction) -->
+    <div class="absolute top-3 left-3 z-20 pointer-events-none">
+      <div class="bg-slate-900/85 backdrop-blur border border-slate-700/80 rounded-lg px-3 py-1.5 shadow-xl text-xs text-slate-300 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></span>
+        <span>Kliknutím do mapy zvolíte start</span>
+      </div>
+    </div>
+
+    <!-- Drawer Controls / Dashboard Overlay -->
+    <div 
+      class="absolute bottom-0 left-0 right-0 z-20 md:top-4 md:bottom-auto md:left-4 md:right-auto md:w-96 max-h-[85vh] md:max-h-[calc(100vh-120px)] flex flex-col"
+    >
+      <!-- Collapsible Container -->
+      <div class="bg-slate-900/95 backdrop-blur-xl border-t md:border border-slate-800 md:rounded-2xl shadow-2xl overflow-hidden flex flex-col transition-all duration-300">
+        
+        <!-- Drawer Header / Collapse Bar -->
+        <div 
+          @click="drawerOpen = !drawerOpen" 
+          class="px-4 py-3 bg-slate-800/80 hover:bg-slate-800 cursor-pointer flex items-center justify-between border-b border-slate-700/60"
+        >
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
+              <span>🛠️ Nastavení okruhu</span>
+            </span>
+            <template x-if="routeData">
+              <span class="px-2 py-0.5 text-[11px] font-black bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full" x-text="`${routeData.stats.total_distance_km} km`"></span>
+            </template>
+          </div>
+          <button class="text-slate-400 hover:text-white p-1">
+            <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              class="w-5 h-5 transition-transform duration-200" 
+              :class="drawerOpen ? 'rotate-180' : ''" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              stroke="currentColor"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Drawer Body -->
+        <div x-show="drawerOpen" x-transition class="p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          
+          <!-- Distance Slider -->
+          <div class="space-y-1.5">
+            <div class="flex justify-between items-center text-xs">
+              <span class="font-bold text-slate-300">Cílová délka okruhu:</span>
+              <span class="font-black text-orange-400 text-sm" x-text="`${targetDistKm} km`"></span>
+            </div>
+            <input 
+              type="range" 
+              min="3" 
+              max="35" 
+              step="1" 
+              x-model="targetDistKm" 
+              class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+            />
+            <!-- Quick Distance Presets -->
+            <div class="flex justify-between gap-1.5 pt-1">
+              <button @click="targetDistKm = 5" :class="targetDistKm == 5 ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'" class="flex-1 py-1 text-[11px] font-bold rounded border border-slate-700 transition">5 km</button>
+              <button @click="targetDistKm = 10" :class="targetDistKm == 10 ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'" class="flex-1 py-1 text-[11px] font-bold rounded border border-slate-700 transition">10 km</button>
+              <button @click="targetDistKm = 15" :class="targetDistKm == 15 ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'" class="flex-1 py-1 text-[11px] font-bold rounded border border-slate-700 transition">15 km</button>
+              <button @click="targetDistKm = 20" :class="targetDistKm == 20 ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'" class="flex-1 py-1 text-[11px] font-bold rounded border border-slate-700 transition">20 km</button>
+            </div>
+          </div>
+
+          <!-- Strictness Mode -->
+          <div class="space-y-1.5">
+            <label class="block text-xs font-bold text-slate-300">Režim povrchu:</label>
+            <div class="grid grid-cols-3 gap-1.5 text-xs font-medium">
+              <button 
+                @click="strictness = 'hardcore'" 
+                :class="strictness === 'hardcore' ? 'bg-orange-600 text-white font-bold border-orange-500' : 'bg-slate-800 text-slate-400 border-slate-700'"
+                class="py-2 px-1 text-center rounded-lg border transition"
+              >
+                🚜 Čistý Off-Road
+              </button>
+              <button 
+                @click="strictness = 'balanced'" 
+                :class="strictness === 'balanced' ? 'bg-orange-600 text-white font-bold border-orange-500' : 'bg-slate-800 text-slate-400 border-slate-700'"
+                class="py-2 px-1 text-center rounded-lg border transition"
+              >
+                ⚡ Vyvážený
+              </button>
+              <button 
+                @click="strictness = 'relaxed'" 
+                :class="strictness === 'relaxed' ? 'bg-orange-600 text-white font-bold border-orange-500' : 'bg-slate-800 text-slate-400 border-slate-700'"
+                class="py-2 px-1 text-center rounded-lg border transition"
+              >
+                🛣️ Mix Cest
+              </button>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="space-y-2 pt-1">
+            <button 
+              @click="generateRoute(false)" 
+              :disabled="loading"
+              class="w-full py-3.5 px-4 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 active:from-orange-700 active:to-amber-700 text-white font-black text-sm uppercase tracking-wider rounded-xl shadow-lg shadow-orange-600/30 flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <template x-if="!loading">
+                <span class="flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  <span>Vygenerovat okruh</span>
+                </span>
+              </template>
+              <template x-if="loading">
+                <span class="flex items-center gap-2">
+                  <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span class="text-xs normal-case font-bold" x-text="loadingStep"></span>
+                </span>
+              </template>
+            </button>
+
+            <!-- Randomize Shape Button -->
+            <button 
+              @click="generateRoute(true)" 
+              :disabled="loading"
+              class="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-lg border border-slate-700 flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+            >
+              <span>🎲 Zkusit jiný tvar okruhu</span>
+            </button>
+          </div>
+
+          <!-- Error Message Banner -->
+          <div x-show="error" x-transition class="p-3 bg-rose-950/80 border border-rose-800 text-rose-200 text-xs rounded-xl flex items-start gap-2">
+            <span class="text-base">⚠️</span>
+            <span x-text="error" class="font-medium"></span>
+          </div>
+
+          <!-- Route Analytics & GPX Export Card -->
+          <template x-if="routeData && routeData.stats">
+            <div class="space-y-3 pt-2 border-t border-slate-800">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Statistika okruhu</span>
+                <span class="px-2 py-0.5 text-[10px] font-black bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full">
+                  Připraveno k jízdě
+                </span>
+              </div>
+
+              <!-- Key Metrics Grid -->
+              <div class="grid grid-cols-3 gap-2">
+                <div class="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/60 text-center">
+                  <span class="block text-[10px] font-bold text-slate-400 uppercase">Délka</span>
+                  <span class="text-base font-black text-white" x-text="`${routeData.stats.total_distance_km} km`"></span>
+                </div>
+                <div class="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/60 text-center">
+                  <span class="block text-[10px] font-bold text-emerald-400 uppercase">Polní/Lesní</span>
+                  <span class="text-base font-black text-emerald-400" x-text="`${routeData.stats.offroad_percent}%`"></span>
+                </div>
+                <div class="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/60 text-center">
+                  <span class="block text-[10px] font-bold text-slate-400 uppercase">Čas jízdy</span>
+                  <span class="text-base font-black text-amber-400" x-text="`~${routeData.stats.estimated_time_min} min`"></span>
+                </div>
+              </div>
+
+              <!-- Surface & Trail Details -->
+              <div class="bg-slate-800/40 p-2.5 rounded-xl border border-slate-800 text-xs space-y-1.5">
+                <div class="flex justify-between text-slate-300 text-[11px]">
+                  <span>Nezpevněný terén:</span>
+                  <span class="font-bold text-emerald-400" x-text="`${(routeData.stats.offroad_distance_m / 1000).toFixed(1)} km`"></span>
+                </div>
+                <div class="flex justify-between text-slate-300 text-[11px]">
+                  <span>Asfalt / Přejezdy:</span>
+                  <span class="font-bold text-slate-400" x-text="`${(routeData.stats.paved_distance_m / 1000).toFixed(1)} km (${routeData.stats.paved_percent}%)`"></span>
+                </div>
+              </div>
+
+              <!-- GPX Export Button -->
+              <button 
+                @click="downloadGPX" 
+                class="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition active:scale-98"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                <span>Stáhnout GPX (OsmAnd / Mapy.cz)</span>
+              </button>
+            </div>
+          </template>
+
+        </div>
+      </div>
+    </div>
+  </main>
+
+</body>
+</html>
